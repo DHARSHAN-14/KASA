@@ -19,6 +19,8 @@ class KernelCollector:
 
     _PROC_CMDLINE = Path("/proc/cmdline")
     _LOCKDOWN = Path("/sys/kernel/security/lockdown")
+    _LSM = Path("/sys/kernel/security/lsm")
+    _LSM = Path("/sys/kernel/security/lsm")
 
     def collect(self) -> KernelSnapshot:
         """Collect kernel metadata and kernel security evidence."""
@@ -45,6 +47,11 @@ class KernelCollector:
         if lockdown_error is not None:
             errors.append(lockdown_error)
 
+        _, lsm_evidence, lsm_error = self._collect_lsm()
+
+        if lsm_error is not None:
+            errors.append(lsm_error)
+
         return KernelSnapshot(
             kernel=kernel_info,
             command_line=command_line,
@@ -52,6 +59,7 @@ class KernelCollector:
             evidence=[
                 command_line_evidence,
                 lockdown_evidence,
+                lsm_evidence,
             ],
             collection_errors=errors,
         )
@@ -179,6 +187,83 @@ class KernelCollector:
                 value={
                     "raw": raw_value,
                     "active_mode": active_mode,
+                },
+                status=EvidenceStatus.AVAILABLE,
+                source=source,
+            ),
+            None,
+        )
+
+    def _collect_lsm(
+        self,
+    ) -> tuple[list[str] | None, EvidenceItem, str | None]:
+        source = EvidenceSource(
+            path=str(self._LSM),
+            description="Active Linux Security Modules.",
+        )
+
+        try:
+            raw_value = self._LSM.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).strip()
+
+        except FileNotFoundError:
+            error = f"Active LSM interface unavailable: {self._LSM}"
+
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.lsm",
+                    value=None,
+                    status=EvidenceStatus.UNAVAILABLE,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        except PermissionError:
+            error = f"Permission denied reading active LSMs: {self._LSM}"
+
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.lsm",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        except OSError as exc:
+            error = f"Unable to read active LSMs {self._LSM}: {exc}"
+
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.lsm",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        active_modules = [
+            module.strip() for module in raw_value.split(",") if module.strip()
+        ]
+
+        return (
+            active_modules,
+            EvidenceItem(
+                key="kernel.lsm",
+                value={
+                    "raw": raw_value,
+                    "active": active_modules,
                 },
                 status=EvidenceStatus.AVAILABLE,
                 source=source,
