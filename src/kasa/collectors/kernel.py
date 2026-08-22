@@ -189,7 +189,7 @@ class KernelCollector:
     @staticmethod
     def _parse_lockdown_state(value: str) -> str | None:
         """Extract the active lockdown mode from the kernel interface."""
-        for mode in ("confidentiality", "integrity"):
+        for mode in ("none", "integrity", "confidentiality"):
             if f"[{mode}]" in value:
                 return mode
 
