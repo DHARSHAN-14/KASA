@@ -151,7 +151,7 @@ class ModuleCollector:
         kernel_release: str,
     ) -> tuple[list[str], EvidenceSource | None, str | None]:
         """Read modules built directly into the running kernel."""
-        path = Path(f"/lib/modules/{kernel_release}/build/modules.builtin")
+        path = Path(f"/lib/modules/{kernel_release}/modules.builtin")
 
         try:
             content = path.read_text(
