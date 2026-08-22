@@ -24,3 +24,12 @@ def test_kernel_collector_contains_command_line_evidence() -> None:
     )
 
     assert command_line.source.path == str(Path("/proc/cmdline"))
+
+
+def test_kernel_collector_contains_lockdown_evidence() -> None:
+    snapshot = KernelCollector().collect()
+
+    lockdown = next(item for item in snapshot.evidence if item.key == "kernel.lockdown")
+
+    assert lockdown.source.path == str(Path("/sys/kernel/security/lockdown"))
+    assert lockdown.status.value in {"available", "unavailable", "error"}

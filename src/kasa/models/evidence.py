@@ -61,5 +61,6 @@ class KernelSnapshot(BaseModel):
 
     kernel: KernelInfo
     command_line: str | None = None
+    lockdown: str | None = None
     evidence: list[EvidenceItem] = Field(default_factory=list)
     collection_errors: list[str] = Field(default_factory=list)
