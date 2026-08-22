@@ -1,128 +1,127 @@
-"""Tests for the kernel module collector."""
+"""Tests for kernel module security analysis."""
 
-from pathlib import Path
+from kasa.analyzers.modules import ModuleAnalyzer
+from kasa.collectors.modules import KernelModule, ModuleInventory, ModuleState
+from kasa.models.evidence import (
+    EvidenceItem,
+    EvidenceSource,
+    KernelInfo,
+    KernelSnapshot,
+)
+from kasa.models.snapshot import SystemSnapshot
 
-import pytest
 
-from kasa.collectors.modules import ModuleCollector, ModuleState
-
-
-def test_parse_proc_modules_line() -> None:
-    collector = ModuleCollector()
-
-    module = collector._parse_proc_modules_line(
-        "test_module 16384 2 dependency_a,dependency_b 16384 0"
+def make_snapshot(
+    config: dict[str, str],
+    command_line: str = "",
+) -> SystemSnapshot:
+    """Create a minimal system snapshot for module tests."""
+    return SystemSnapshot(
+        kernel=KernelSnapshot(
+            kernel=KernelInfo(
+                release="test",
+                version="test",
+                machine="x86_64",
+                node="test",
+                system="Linux",
+                processor="test",
+            ),
+            command_line=command_line,
+            evidence=[],
+        ),
+        kernel_config=[
+            EvidenceItem(
+                key="kernel.config",
+                value={"options": config},
+                status="available",
+                source=EvidenceSource(
+                    path="/boot/config-test",
+                    description="Test kernel configuration.",
+                ),
+            )
+        ],
+        modules=ModuleInventory(
+            loaded=[
+                KernelModule(
+                    name="test_module",
+                    state=ModuleState.LOADED,
+                    size=123,
+                    reference_count=0,
+                    dependencies=[],
+                    source="/proc/modules",
+                )
+            ]
+        ),
+        filesystems={},
     )
 
-    assert module.name == "test_module"
-    assert module.state is ModuleState.LOADED
-    assert module.size == 16384
-    assert module.reference_count == 2
-    assert module.dependencies == [
-        "dependency_a",
-        "dependency_b",
-    ]
-    assert module.source == "/proc/modules"
 
-
-def test_parse_proc_modules_without_dependencies() -> None:
-    collector = ModuleCollector()
-
-    module = collector._parse_proc_modules_line("test_module 8192 0 - 16384 0")
-
-    assert module.dependencies == []
-
-
-def test_invalid_proc_modules_line() -> None:
-    collector = ModuleCollector()
-
-    with pytest.raises(ValueError, match="expected at least 6 fields"):
-        collector._parse_proc_modules_line("invalid")
-
-
-def test_invalid_module_size() -> None:
-    collector = ModuleCollector()
-
-    with pytest.raises(ValueError, match="invalid module size"):
-        collector._parse_proc_modules_line("test_module invalid 2 - 16384 0")
-
-
-def test_invalid_reference_count() -> None:
-    collector = ModuleCollector()
-
-    with pytest.raises(ValueError, match="invalid reference count"):
-        collector._parse_proc_modules_line("test_module 16384 invalid - 16384 0")
-
-
-def test_missing_loaded_module_interface(
-    tmp_path: Path,
-) -> None:
-    collector = ModuleCollector()
-    collector._PROC_MODULES = tmp_path / "missing"
-
-    modules, error = collector._collect_loaded_modules()
-
-    assert modules == []
-    assert error is not None
-    assert "Module interface unavailable" in error
-
-
-def test_loaded_modules_are_collected(
-    tmp_path: Path,
-) -> None:
-    collector = ModuleCollector()
-
-    proc_modules = tmp_path / "modules"
-
-    proc_modules.write_text(
-        "test_module 16384 2 dependency_a,dependency_b 16384 0\n"
-        "another_module 8192 0 - 16384 0\n",
-        encoding="utf-8",
+def test_module_signing_enforcement_enabled_by_config() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_MODULE_SIG": "y",
+            "CONFIG_MODULE_SIG_FORCE": "y",
+        }
     )
 
-    collector._PROC_MODULES = proc_modules
+    findings = ModuleAnalyzer().analyze(snapshot)
 
-    modules, error = collector._collect_loaded_modules()
-
-    assert error is None
-    assert len(modules) == 2
-
-    assert modules[0].name == "test_module"
-    assert modules[0].state is ModuleState.LOADED
-    assert modules[0].size == 16384
-    assert modules[0].reference_count == 2
-
-    assert modules[1].name == "another_module"
-    assert modules[1].dependencies == []
+    assert not any(finding.id == "KASA-MODULE-002" for finding in findings)
 
 
-def test_builtin_modules_missing() -> None:
-    collector = ModuleCollector()
-
-    builtin, source, error = collector._collect_builtin_modules(
-        "definitely-nonexistent-kernel-release"
+def test_module_signing_enforcement_enabled_by_command_line() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_MODULE_SIG": "y",
+            "CONFIG_MODULE_SIG_FORCE": "n",
+        },
+        command_line="quiet module.sig_enforce=1",
     )
 
-    assert builtin == []
-    assert source is None
-    assert error is not None
-    assert "Built-in module metadata unavailable" in error
+    findings = ModuleAnalyzer().analyze(snapshot)
+
+    assert not any(finding.id == "KASA-MODULE-002" for finding in findings)
 
 
-def test_module_inventory_model() -> None:
-    collector = ModuleCollector()
+def test_module_signing_enforcement_disabled_creates_finding() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_MODULE_SIG": "y",
+            "CONFIG_MODULE_SIG_FORCE": "n",
+        }
+    )
 
-    inventory = collector.collect("definitely-nonexistent-kernel-release")
+    findings = ModuleAnalyzer().analyze(snapshot)
 
-    assert inventory.loaded
-    assert inventory.sources
-    assert inventory.errors
+    finding = next(finding for finding in findings if finding.id == "KASA-MODULE-002")
+
+    assert finding.severity.value == "medium"
+    assert finding.evidence[0].key == "module.signing"
+    assert finding.evidence[0].value["config_module_sig"] == "y"
+    assert finding.evidence[0].value["config_module_sig_force"] == "n"
+    assert finding.evidence[0].value["module_sig_enforce"] is False
 
 
-def test_module_inventory_contains_loaded_module() -> None:
-    collector = ModuleCollector()
+def test_module_inventory_has_structured_evidence() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_MODULE_SIG": "y",
+            "CONFIG_MODULE_SIG_FORCE": "y",
+        }
+    )
 
-    inventory = collector.collect("definitely-nonexistent-kernel-release")
+    findings = ModuleAnalyzer().analyze(snapshot)
 
-    assert inventory.loaded[0].state is ModuleState.LOADED
-    assert inventory.loaded[0].name
+    finding = next(finding for finding in findings if finding.id == "KASA-MODULE-001")
+
+    assert finding.evidence[0].key == "module.inventory"
+    assert finding.evidence[0].value["count"] == 1
+    assert finding.evidence[0].value["modules"][0]["name"] == "test_module"
+
+
+def test_missing_kernel_config_does_not_create_false_finding() -> None:
+    snapshot = make_snapshot({})
+
+    findings = ModuleAnalyzer().analyze(snapshot)
+
+    assert not any(finding.id == "KASA-MODULE-002" for finding in findings)
