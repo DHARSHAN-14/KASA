@@ -10,6 +10,7 @@ from kasa.analyzers.config import KernelConfigAnalyzer
 from kasa.analyzers.filesystem import FilesystemAnalyzer
 from kasa.analyzers.kernel import KernelAnalyzer
 from kasa.analyzers.modules import ModuleAnalyzer
+from kasa.analyzers.normalize import FindingNormalizer
 from kasa.analyzers.risk import RiskScorer
 from kasa.collectors.system import SystemCollector
 from kasa.models.analysis import AnalysisResult
@@ -113,7 +114,9 @@ def analyze(
     for analyzer in analyzers:
         findings.extend(analyzer.analyze(snapshot))
 
-    result = AnalysisResult(findings=findings)
+    normalized_findings = FindingNormalizer().normalize(findings)
+
+    result = AnalysisResult(findings=normalized_findings)
     risk = RiskScorer().assess(result.findings)
 
     if json_output:
