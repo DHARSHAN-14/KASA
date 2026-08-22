@@ -1,5 +1,6 @@
 """KASA command-line interface."""
 
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -9,6 +10,7 @@ from kasa.analyzers.config import KernelConfigAnalyzer
 from kasa.analyzers.filesystem import FilesystemAnalyzer
 from kasa.analyzers.kernel import KernelAnalyzer
 from kasa.analyzers.modules import ModuleAnalyzer
+from kasa.analyzers.risk import RiskScorer
 from kasa.collectors.system import SystemCollector
 from kasa.models.analysis import AnalysisResult
 
@@ -92,7 +94,7 @@ def analyze(
         bool,
         typer.Option(
             "--json",
-            help="Output security findings as JSON.",
+            help="Output security findings and risk assessment as JSON.",
         ),
     ] = False,
 ) -> None:
@@ -112,25 +114,37 @@ def analyze(
         findings.extend(analyzer.analyze(snapshot))
 
     result = AnalysisResult(findings=findings)
+    risk = RiskScorer().assess(result.findings)
 
     if json_output:
-        typer.echo(result.model_dump_json(indent=2))
+        output = {
+            "findings": [
+                finding.model_dump(mode="json") for finding in result.findings
+            ],
+            "risk": risk.model_dump(mode="json"),
+        }
+
+        typer.echo(json.dumps(output, indent=2))
         return
 
     typer.echo("KASA Security Analysis")
+    typer.echo()
+    typer.echo(f"Risk Score: {risk.score}")
+    typer.echo(f"Risk Rating: {risk.rating.value.upper()}")
+    typer.echo()
+    typer.echo(f"Findings: {result.total}")
     typer.echo()
 
     if not result.findings:
         typer.echo("No security findings detected.")
         return
 
-    typer.echo(f"Findings: {result.total}")
-    typer.echo()
-
     for finding in result.findings:
         typer.echo(f"[{finding.severity.value.upper()}] {finding.id}")
         typer.echo(f"  {finding.title}")
         typer.echo(f"  {finding.description}")
+
         if finding.recommendation:
             typer.echo(f"  Recommendation: {finding.recommendation}")
+
         typer.echo()
