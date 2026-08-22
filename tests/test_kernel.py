@@ -125,3 +125,42 @@ def test_kernel_analyzer_does_not_report_confidentiality_lockdown() -> None:
     findings = KernelAnalyzer().analyze(snapshot)
 
     assert findings == []
+
+
+def test_kernel_collector_contains_lsm_evidence() -> None:
+    snapshot = KernelCollector().collect()
+
+    lsm = next(item for item in snapshot.evidence if item.key == "kernel.lsm")
+
+    assert lsm.source.path == str(Path("/sys/kernel/security/lsm"))
+    assert lsm.status.value in {"available", "unavailable", "error"}
+
+
+def test_parse_lsm_state() -> None:
+    raw = "lockdown,capability,yama,selinux,bpf,landlock,ipe,ima,evm"
+
+    active = [module.strip() for module in raw.split(",") if module.strip()]
+
+    assert active == [
+        "lockdown",
+        "capability",
+        "yama",
+        "selinux",
+        "bpf",
+        "landlock",
+        "ipe",
+        "ima",
+        "evm",
+    ]
+
+
+def test_parse_lsm_state_ignores_empty_entries() -> None:
+    raw = "lockdown,, capability, ,selinux,"
+
+    active = [module.strip() for module in raw.split(",") if module.strip()]
+
+    assert active == [
+        "lockdown",
+        "capability",
+        "selinux",
+    ]
