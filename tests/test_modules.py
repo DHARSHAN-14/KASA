@@ -125,3 +125,21 @@ def test_missing_kernel_config_does_not_create_false_finding() -> None:
     findings = ModuleAnalyzer().analyze(snapshot)
 
     assert not any(finding.id == "KASA-MODULE-002" for finding in findings)
+
+
+def test_missing_module_sig_force_is_not_treated_as_enforced() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_MODULE_SIG": "y",
+            "CONFIG_MODULE_SIG_ALL": "y",
+        }
+    )
+
+    findings = ModuleAnalyzer().analyze(snapshot)
+
+    finding = next(finding for finding in findings if finding.id == "KASA-MODULE-002")
+
+    assert finding.severity.value == "medium"
+    assert finding.evidence[0].value["config_module_sig"] == "y"
+    assert finding.evidence[0].value["config_module_sig_force"] is None
+    assert finding.evidence[0].value["module_sig_enforce"] is False
