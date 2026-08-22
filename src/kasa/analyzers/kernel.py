@@ -42,7 +42,7 @@ class KernelAnalyzer(Analyzer):
         if not isinstance(lockdown.value, dict):
             return
 
-        mode = lockdown.value.get("mode")
+        mode = lockdown.value.get("active_mode")
 
         if mode != "none":
             return
