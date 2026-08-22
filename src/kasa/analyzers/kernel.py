@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from kasa.analyzers.base import Analyzer
-from kasa.models.finding import Finding, Severity
+from kasa.models.finding import Finding, FindingEvidence, Severity
 from kasa.models.snapshot import SystemSnapshot
 
 
@@ -31,6 +31,12 @@ class KernelAnalyzer(Analyzer):
                     severity=Severity.LOW,
                     category="kernel-hardening",
                     evidence_keys=["kernel.command_line"],
+                    evidence=[
+                        FindingEvidence(
+                            key="kernel.command_line",
+                            value={"command_line": command_line},
+                        )
+                    ],
                     recommendation=(
                         "Evaluate whether kernel lockdown should be enabled "
                         "for this system."

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from kasa.analyzers.base import Analyzer
-from kasa.models.finding import Finding, Severity
+from kasa.models.finding import Finding, FindingEvidence, Severity
 from kasa.models.snapshot import SystemSnapshot
 
 
@@ -26,6 +26,15 @@ class ModuleAnalyzer(Analyzer):
                     severity=Severity.INFO,
                     category="kernel-modules",
                     evidence_keys=["module.inventory"],
+                    evidence=[
+                        FindingEvidence(
+                            key="module.inventory",
+                            value={
+                                "count": len(snapshot.modules.loaded),
+                                "modules": snapshot.modules.loaded,
+                            },
+                        )
+                    ],
                     recommendation=(
                         "Review loaded modules and disable unnecessary "
                         "kernel components where appropriate."

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from kasa.analyzers.base import Analyzer
-from kasa.models.finding import Finding, Severity
+from kasa.models.finding import Finding, FindingEvidence, Severity
 from kasa.models.snapshot import SystemSnapshot
 
 
@@ -104,6 +104,15 @@ class KernelConfigAnalyzer(Analyzer):
                 severity=severity,
                 category=category,
                 evidence_keys=["kernel.config"],
+                evidence=[
+                    FindingEvidence(
+                        key="kernel.config",
+                        value={
+                            "option": option,
+                            "value": value,
+                        },
+                    )
+                ],
                 recommendation=recommendation,
             )
         )
