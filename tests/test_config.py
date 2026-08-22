@@ -1,59 +1,125 @@
-"""Tests for the kernel configuration collector."""
+"""Tests for kernel configuration security analysis."""
 
-from pathlib import Path
-
-from kasa.collectors.config import KernelConfigCollector
-from kasa.models.evidence import EvidenceStatus
-
-
-def test_parse_kernel_config() -> None:
-    collector = KernelConfigCollector()
-
-    content = """
-CONFIG_KASLR=y
-CONFIG_BPF=m
-# CONFIG_DEBUG_FS is not set
-CONFIG_TEST_VALUE="example"
-"""
-
-    config = collector._parse_config(content)
-
-    assert config["CONFIG_KASLR"] == "y"
-    assert config["CONFIG_BPF"] == "m"
-    assert config["CONFIG_DEBUG_FS"] == "n"
-    assert config["CONFIG_TEST_VALUE"] == '"example"'
+from kasa.analyzers.config import KernelConfigAnalyzer
+from kasa.collectors.filesystem import FilesystemInventory
+from kasa.collectors.modules import ModuleInventory
+from kasa.models.evidence import (
+    EvidenceItem,
+    EvidenceSource,
+    EvidenceStatus,
+    KernelInfo,
+    KernelSnapshot,
+)
+from kasa.models.snapshot import SystemSnapshot
 
 
-def test_missing_configuration_source_is_unavailable(
-    tmp_path: Path,
-) -> None:
-    collector = KernelConfigCollector()
-
-    source = tmp_path / "missing-config"
-
-    evidence = collector._read_source(source)
-
-    assert evidence.status is EvidenceStatus.UNAVAILABLE
-    assert evidence.value is None
-    assert evidence.source.path == str(source)
-
-
-def test_plain_text_configuration_source(
-    tmp_path: Path,
-) -> None:
-    collector = KernelConfigCollector()
-
-    source = tmp_path / "config"
-
-    source.write_text(
-        "CONFIG_KASLR=y\n# CONFIG_DEBUG_FS is not set\n",
-        encoding="utf-8",
+def make_snapshot(config: dict[str, str]) -> SystemSnapshot:
+    """Create a minimal snapshot containing kernel configuration."""
+    return SystemSnapshot(
+        kernel=KernelSnapshot(
+            kernel=KernelInfo(
+                release="test",
+                version="test",
+                machine="x86_64",
+                node="test",
+                system="Linux",
+                processor="test",
+            ),
+            command_line="",
+        ),
+        kernel_config=[
+            EvidenceItem(
+                key="kernel.config",
+                value={"options": config},
+                status=EvidenceStatus.AVAILABLE,
+                source=EvidenceSource(
+                    path="/proc/config.gz",
+                    description="Kernel configuration.",
+                ),
+            )
+        ],
+        modules=ModuleInventory(),
+        filesystems=FilesystemInventory(),
     )
 
-    evidence = collector._read_source(source)
 
-    assert evidence.status is EvidenceStatus.AVAILABLE
+def test_enabled_kernel_hardening_options_create_no_findings() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_RANDOMIZE_BASE": "y",
+            "CONFIG_STACKPROTECTOR": "y",
+            "CONFIG_STRICT_KERNEL_RWX": "y",
+            "CONFIG_STRICT_MODULE_RWX": "y",
+        }
+    )
 
-    assert evidence.value["options"]["CONFIG_KASLR"] == "y"
-    assert evidence.value["options"]["CONFIG_DEBUG_FS"] == "n"
-    assert evidence.value["option_count"] == 2
+    findings = KernelConfigAnalyzer().analyze(snapshot)
+
+    assert findings == []
+
+
+def test_disabled_kernel_hardening_options_create_findings() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_RANDOMIZE_BASE": "n",
+            "CONFIG_STACKPROTECTOR": "n",
+            "CONFIG_STRICT_KERNEL_RWX": "n",
+            "CONFIG_STRICT_MODULE_RWX": "n",
+        }
+    )
+
+    findings = KernelConfigAnalyzer().analyze(snapshot)
+
+    assert len(findings) == 4
+
+    ids = {finding.id for finding in findings}
+
+    assert ids == {
+        "KASA-CONFIG-RANDOMIZE_BASE",
+        "KASA-CONFIG-STACKPROTECTOR",
+        "KASA-CONFIG-STRICT_KERNEL_RWX",
+        "KASA-CONFIG-STRICT_MODULE_RWX",
+    }
+
+
+def test_disabled_option_contains_structured_evidence() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_RANDOMIZE_BASE": "n",
+        }
+    )
+
+    findings = KernelConfigAnalyzer().analyze(snapshot)
+
+    finding = findings[0]
+
+    assert finding.id == "KASA-CONFIG-RANDOMIZE_BASE"
+    assert finding.severity.value == "medium"
+    assert finding.evidence_keys == ["kernel.config"]
+
+    assert finding.evidence[0].key == "kernel.config"
+    assert finding.evidence[0].value == {
+        "option": "CONFIG_RANDOMIZE_BASE",
+        "value": "n",
+    }
+
+
+def test_zero_value_is_treated_as_disabled() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_RANDOMIZE_BASE": "0",
+        }
+    )
+
+    findings = KernelConfigAnalyzer().analyze(snapshot)
+
+    assert len(findings) == 1
+    assert findings[0].id == "KASA-CONFIG-RANDOMIZE_BASE"
+
+
+def test_missing_kernel_configuration_does_not_create_false_findings() -> None:
+    snapshot = make_snapshot({})
+
+    findings = KernelConfigAnalyzer().analyze(snapshot)
+
+    assert findings == []
