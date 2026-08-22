@@ -6,6 +6,8 @@ from kasa.analyzers.base import Analyzer
 from kasa.models.finding import Finding, Severity
 from kasa.models.snapshot import SystemSnapshot
 
+TMP_MOUNT_POINT = "/tmp"  # noqa: S108
+
 
 class FilesystemAnalyzer(Analyzer):
     """Analyze filesystem mount security properties."""
@@ -15,11 +17,11 @@ class FilesystemAnalyzer(Analyzer):
         findings: list[Finding] = []
 
         for mount in snapshot.filesystems.mounts:
-            if mount.mount_point == "/tmp" and "noexec" not in mount.options:  # noqa: S108
+            if mount.mount_point == TMP_MOUNT_POINT and "noexec" not in mount.options:
                 findings.append(
                     Finding(
                         id="KASA-FS-001",
-                        title="/tmp is executable",  # noqa: S108
+                        title="Temporary directory is executable",
                         description=(
                             "The /tmp filesystem is mounted without the noexec option."
                         ),

@@ -5,7 +5,12 @@ from typing import Annotated
 
 import typer
 
+from kasa.analyzers.config import KernelConfigAnalyzer
+from kasa.analyzers.filesystem import FilesystemAnalyzer
+from kasa.analyzers.kernel import KernelAnalyzer
+from kasa.analyzers.modules import ModuleAnalyzer
 from kasa.collectors.system import SystemCollector
+from kasa.models.analysis import AnalysisResult
 
 app = typer.Typer(
     name="kasa",
@@ -79,3 +84,53 @@ def collect(
         typer.echo(f"Collection errors: {len(snapshot.errors)}")
     else:
         typer.echo("Status: Collection successful")
+
+
+@app.command()
+def analyze(
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Output security findings as JSON.",
+        ),
+    ] = False,
+) -> None:
+    """Analyze collected evidence for security findings."""
+    snapshot = SystemCollector().collect()
+
+    analyzers = [
+        KernelAnalyzer(),
+        KernelConfigAnalyzer(),
+        ModuleAnalyzer(),
+        FilesystemAnalyzer(),
+    ]
+
+    findings = []
+
+    for analyzer in analyzers:
+        findings.extend(analyzer.analyze(snapshot))
+
+    result = AnalysisResult(findings=findings)
+
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+        return
+
+    typer.echo("KASA Security Analysis")
+    typer.echo()
+
+    if not result.findings:
+        typer.echo("No security findings detected.")
+        return
+
+    typer.echo(f"Findings: {result.total}")
+    typer.echo()
+
+    for finding in result.findings:
+        typer.echo(f"[{finding.severity.value.upper()}] {finding.id}")
+        typer.echo(f"  {finding.title}")
+        typer.echo(f"  {finding.description}")
+        if finding.recommendation:
+            typer.echo(f"  Recommendation: {finding.recommendation}")
+        typer.echo()
