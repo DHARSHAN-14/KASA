@@ -1,5 +1,8 @@
 """KASA command-line interface."""
 
+from pathlib import Path
+from typing import Annotated
+
 import typer
 
 from kasa.collectors.system import SystemCollector
@@ -25,17 +28,54 @@ def version() -> None:
 
 
 @app.command()
-def collect() -> None:
+def collect(
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Output the complete evidence snapshot as JSON.",
+        ),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Write the complete evidence snapshot to a JSON file.",
+        ),
+    ] = None,
+) -> None:
     """Collect Linux kernel attack-surface evidence."""
     snapshot = SystemCollector().collect()
 
-    typer.echo(f"Kernel: {snapshot.kernel.kernel.release}")
-    typer.echo(f"Modules loaded: {len(snapshot.modules.loaded)}")
-    typer.echo(f"Modules built-in: {len(snapshot.modules.builtin)}")
-    typer.echo(f"Filesystem mounts: {len(snapshot.filesystems.mounts)}")
-    typer.echo(
-        f"Supported filesystems: {len(snapshot.filesystems.supported_filesystems)}"
-    )
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            snapshot.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        typer.echo(f"Evidence written to: {output}")
+        return
+
+    if json_output:
+        typer.echo(snapshot.model_dump_json(indent=2))
+        return
+
+    typer.echo("KASA Linux Kernel Attack Surface Analyzer")
+    typer.echo()
+    typer.echo("Kernel")
+    typer.echo(f"  Release: {snapshot.kernel.kernel.release}")
+    typer.echo()
+    typer.echo("Modules")
+    typer.echo(f"  Loaded: {len(snapshot.modules.loaded)}")
+    typer.echo(f"  Built-in: {len(snapshot.modules.builtin)}")
+    typer.echo()
+    typer.echo("Filesystem")
+    typer.echo(f"  Mounts: {len(snapshot.filesystems.mounts)}")
+    typer.echo(f"  Supported: {len(snapshot.filesystems.supported_filesystems)}")
+    typer.echo()
 
     if snapshot.errors:
         typer.echo(f"Collection errors: {len(snapshot.errors)}")
+    else:
+        typer.echo("Status: Collection successful")
