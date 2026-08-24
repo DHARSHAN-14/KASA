@@ -415,7 +415,7 @@ class KernelCollector:
         except (OSError, ValueError):
             pass
 
-        value = {
+        value: dict[str, object] = {
             "enabled": True,
             "mode": mode,
             "policy_version": policy_version,
