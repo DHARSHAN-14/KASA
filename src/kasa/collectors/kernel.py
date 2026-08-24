@@ -260,9 +260,7 @@ class KernelCollector:
                 error,
             )
 
-        active_modules = [
-            module.strip() for module in raw_value.split(",") if module.strip()
-        ]
+        active_modules = self._parse_lsm_state(raw_value)
 
         return (
             active_modules,
@@ -277,6 +275,11 @@ class KernelCollector:
             ),
             None,
         )
+
+    @staticmethod
+    def _parse_lsm_state(value: str) -> list[str]:
+        """Extract the active LSM list from comma-separated string."""
+        return [module.strip() for module in value.split(",") if module.strip()]
 
     @staticmethod
     def _parse_lockdown_state(value: str) -> str | None:

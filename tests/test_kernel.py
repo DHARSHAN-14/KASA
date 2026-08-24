@@ -141,9 +141,7 @@ def test_kernel_collector_contains_lsm_evidence() -> None:
 def test_parse_lsm_state() -> None:
     raw = "lockdown,capability,yama,selinux,bpf,landlock,ipe,ima,evm"
 
-    active = [module.strip() for module in raw.split(",") if module.strip()]
-
-    assert active == [
+    assert KernelCollector._parse_lsm_state(raw) == [
         "lockdown",
         "capability",
         "yama",
@@ -159,13 +157,112 @@ def test_parse_lsm_state() -> None:
 def test_parse_lsm_state_ignores_empty_entries() -> None:
     raw = "lockdown,, capability, ,selinux,"
 
-    active = [module.strip() for module in raw.split(",") if module.strip()]
-
-    assert active == [
+    assert KernelCollector._parse_lsm_state(raw) == [
         "lockdown",
         "capability",
         "selinux",
     ]
+
+
+def test_parse_lsm_state_whitespace_and_empty() -> None:
+    assert KernelCollector._parse_lsm_state("  \n  ,  , \t ") == []
+    assert KernelCollector._parse_lsm_state("") == []
+
+
+def test_collect_lsm_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Successful read of /sys/kernel/security/lsm produces structured evidence."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._LSM:
+            return "lockdown,capability,yama,selinux,bpf,landlock,ipe,ima,evm\n"
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    active, evidence, error = KernelCollector()._collect_lsm()
+
+    assert error is None
+    assert evidence.key == "kernel.lsm"
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert active == [
+        "lockdown",
+        "capability",
+        "yama",
+        "selinux",
+        "bpf",
+        "landlock",
+        "ipe",
+        "ima",
+        "evm",
+    ]
+    assert evidence.value == {
+        "raw": "lockdown,capability,yama,selinux,bpf,landlock,ipe,ima,evm",
+        "active": active,
+    }
+
+
+def test_collect_lsm_missing_interface(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing /sys/kernel/security/lsm produces UNAVAILABLE status and error."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._LSM:
+            raise FileNotFoundError(self)
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    active, evidence, error = KernelCollector()._collect_lsm()
+
+    assert active is None
+    assert error is not None
+    assert "Active LSM interface unavailable" in error
+    assert evidence.status == EvidenceStatus.UNAVAILABLE
+    assert evidence.key == "kernel.lsm"
+    assert evidence.value is None
+
+
+def test_collect_lsm_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Permission denied reading /sys/kernel/security/lsm produces ERROR status."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._LSM:
+            raise PermissionError("Permission denied")
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    active, evidence, error = KernelCollector()._collect_lsm()
+
+    assert active is None
+    assert error is not None
+    assert "Permission denied reading active LSMs" in error
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.key == "kernel.lsm"
+    assert evidence.value is None
+
+
+def test_collect_lsm_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OSError reading /sys/kernel/security/lsm produces ERROR status."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._LSM:
+            raise OSError("I/O error")
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    active, evidence, error = KernelCollector()._collect_lsm()
+
+    assert active is None
+    assert error is not None
+    assert "Unable to read active LSMs" in error
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.key == "kernel.lsm"
+    assert evidence.value is None
 
 
 # ---------------------------------------------------------------------------
