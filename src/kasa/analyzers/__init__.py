@@ -6,6 +6,7 @@ from kasa.analyzers.kernel import KernelAnalyzer
 from kasa.analyzers.modules import ModuleAnalyzer
 from kasa.analyzers.normalize import FindingNormalizer
 from kasa.analyzers.risk import RiskScorer
+from kasa.analyzers.selinux import SELinuxAnalyzer
 
 __all__ = [
     "FilesystemAnalyzer",
@@ -14,4 +15,5 @@ __all__ = [
     "KernelConfigAnalyzer",
     "ModuleAnalyzer",
     "RiskScorer",
+    "SELinuxAnalyzer",
 ]

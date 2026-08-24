@@ -12,6 +12,7 @@ from kasa.analyzers.kernel import KernelAnalyzer
 from kasa.analyzers.modules import ModuleAnalyzer
 from kasa.analyzers.normalize import FindingNormalizer
 from kasa.analyzers.risk import RiskScorer
+from kasa.analyzers.selinux import SELinuxAnalyzer
 from kasa.collectors.system import SystemCollector
 from kasa.models.analysis import AnalysisResult
 
@@ -107,6 +108,7 @@ def analyze(
         KernelConfigAnalyzer(),
         ModuleAnalyzer(),
         FilesystemAnalyzer(),
+        SELinuxAnalyzer(),
     ]
 
     findings = []
