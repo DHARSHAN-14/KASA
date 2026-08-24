@@ -525,3 +525,173 @@ def test_kernel_collector_contains_ima_evidence() -> None:
     assert ima is not None
     assert ima.source.path == str(KernelCollector._IMA)
     assert ima.status.value in {"available", "unavailable", "error"}
+
+
+# ---------------------------------------------------------------------------
+# EVM evidence tests
+# ---------------------------------------------------------------------------
+
+
+def test_collect_evm_available_readable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Available readable EVM interface returns structured evidence."""
+    original_exists = Path.exists
+    original_read_text = Path.read_text
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._EVM:
+            return True
+        return original_exists(self)
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._EVM:
+            return "3\n"
+        return original_read_text(self, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    cmdline = "quiet evm=fix"
+    val, evidence, error = KernelCollector()._collect_evm(cmdline)
+
+    assert error is None
+    assert evidence.key == "kernel.evm"
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert val is not None
+    assert val["supported"] is True
+    assert val["readable"] is True
+    assert val["status_raw"] == "3"
+    assert val["status_flags"] == 3
+    assert val["active_state"] == "complete"
+    assert val["boot_parameters"] == {"evm": "fix"}
+
+
+def test_collect_evm_available_uninitialized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EVM flag 0 maps to uninitialized active state."""
+    original_exists = Path.exists
+    original_read_text = Path.read_text
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._EVM:
+            return True
+        return original_exists(self)
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._EVM:
+            return "0\n"
+        return original_read_text(self, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    val, evidence, error = KernelCollector()._collect_evm()
+
+    assert error is None
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert val is not None
+    assert val["active_state"] == "uninitialized"
+
+
+def test_collect_evm_unreadable_file_still_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When EVM node exists but cannot be read, evidence is AVAILABLE."""
+    original_exists = Path.exists
+    original_read_text = Path.read_text
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._EVM:
+            return True
+        return original_exists(self)
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._EVM:
+            raise PermissionError("Permission denied")
+        return original_read_text(self, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    val, evidence, error = KernelCollector()._collect_evm()
+
+    assert error is None
+    assert evidence.key == "kernel.evm"
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert val is not None
+    assert val["readable"] is False
+    assert val["status_raw"] is None
+    assert val["status_flags"] is None
+    assert val["active_state"] == "unknown"
+
+
+def test_collect_evm_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing EVM paths return UNAVAILABLE status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self in (KernelCollector._EVM, KernelCollector._EVM_INTEGRITY):
+            return False
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_evm()
+
+    assert val is None
+    assert error is not None
+    assert "EVM interface unavailable" in error
+    assert evidence.status == EvidenceStatus.UNAVAILABLE
+    assert evidence.key == "kernel.evm"
+
+
+def test_collect_evm_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PermissionError on EVM directory check returns ERROR status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._EVM:
+            raise PermissionError("Permission denied")
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_evm()
+
+    assert val is None
+    assert error is not None
+    assert "Permission denied accessing EVM interface" in error
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.key == "kernel.evm"
+
+
+def test_collect_evm_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OSError on EVM directory check returns ERROR status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._EVM:
+            raise OSError("I/O error")
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_evm()
+
+    assert val is None
+    assert error is not None
+    assert "Unable to access EVM interface" in error
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.key == "kernel.evm"
+
+
+def test_kernel_collector_contains_evm_evidence() -> None:
+    """collect() must include a 'kernel.evm' EvidenceItem."""
+    snapshot = KernelCollector().collect()
+
+    evm = next(
+        (item for item in snapshot.evidence if item.key == "kernel.evm"),
+        None,
+    )
+
+    assert evm is not None
+    assert evm.source.path == str(KernelCollector._EVM)
+    assert evm.status.value in {"available", "unavailable", "error"}

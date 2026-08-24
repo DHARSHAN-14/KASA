@@ -25,6 +25,8 @@ class KernelCollector:
     _SELINUX_POLICY_VERSION = Path("/sys/fs/selinux/policyvers")
     _IMA = Path("/sys/kernel/security/ima")
     _IMA_INTEGRITY = Path("/sys/kernel/security/integrity/ima")
+    _EVM = Path("/sys/kernel/security/evm")
+    _EVM_INTEGRITY = Path("/sys/kernel/security/integrity/evm/evm")
 
     def collect(self) -> KernelSnapshot:
         """Collect kernel metadata and kernel security evidence."""
@@ -66,6 +68,11 @@ class KernelCollector:
         if ima_error is not None:
             errors.append(ima_error)
 
+        _, evm_evidence, evm_error = self._collect_evm(command_line)
+
+        if evm_error is not None:
+            errors.append(evm_error)
+
         return KernelSnapshot(
             kernel=kernel_info,
             command_line=command_line,
@@ -76,6 +83,7 @@ class KernelCollector:
                 lsm_evidence,
                 selinux_evidence,
                 ima_evidence,
+                evm_evidence,
             ],
             collection_errors=errors,
         )
@@ -527,6 +535,114 @@ class KernelCollector:
             value,
             EvidenceItem(
                 key="kernel.ima",
+                value=value,
+                status=EvidenceStatus.AVAILABLE,
+                source=source,
+            ),
+            None,
+        )
+
+    def _collect_evm(
+        self,
+        command_line: str | None = None,
+    ) -> tuple[dict[str, object] | None, EvidenceItem, str | None]:
+        """Collect runtime EVM (Extended Verification Module) state."""
+        source = EvidenceSource(
+            path=str(self._EVM),
+            description="EVM runtime state and metadata verification interface.",
+        )
+
+        try:
+            if self._EVM.exists():
+                target_path = self._EVM
+            elif self._EVM_INTEGRITY.exists():
+                target_path = self._EVM_INTEGRITY
+            else:
+                target_path = None
+        except PermissionError:
+            error = f"Permission denied accessing EVM interface: {self._EVM}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.evm",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+        except OSError as exc:
+            error = f"Unable to access EVM interface {self._EVM}: {exc}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.evm",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        if target_path is None:
+            error = f"EVM interface unavailable: {self._EVM}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.evm",
+                    value=None,
+                    status=EvidenceStatus.UNAVAILABLE,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        status_raw: str | None = None
+        status_flags: int | None = None
+        readable = False
+
+        try:
+            status_raw = target_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).strip()
+            status_flags = int(status_raw)
+            readable = True
+        except (PermissionError, FileNotFoundError, OSError, ValueError):
+            readable = False
+
+        boot_params = self._parse_cmdline_params(command_line, "evm")
+
+        active_state = "unknown"
+        if status_flags is not None:
+            if status_flags == 0:
+                active_state = "uninitialized"
+            elif (status_flags & 1) and (status_flags & 2):
+                active_state = "complete"
+            elif status_flags & 1:
+                active_state = "hmac_initialized"
+            elif status_flags & 2:
+                active_state = "x509_initialized"
+            else:
+                active_state = f"flags_{status_flags}"
+
+        value: dict[str, object] = {
+            "supported": True,
+            "interface_path": str(target_path),
+            "readable": readable,
+            "status_raw": status_raw,
+            "status_flags": status_flags,
+            "boot_parameters": boot_params,
+            "active_state": active_state,
+        }
+
+        return (
+            value,
+            EvidenceItem(
+                key="kernel.evm",
                 value=value,
                 status=EvidenceStatus.AVAILABLE,
                 source=source,
