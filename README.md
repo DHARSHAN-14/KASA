@@ -106,6 +106,7 @@ flowchart TD
         KCA["KernelConfigAnalyzer"]
         MA["ModuleAnalyzer"]
         FA["FilesystemAnalyzer"]
+        SELA["SELinuxAnalyzer"]
         Norm["FindingNormalizer"]
         RS["RiskScorer"]
     end
@@ -119,7 +120,7 @@ flowchart TD
     TargetHost --> Collectors
     KC & KCC & MC & FC --> SC --> SS
     SS --> Analyzers
-    KA & KCA & MA & FA --> Norm --> RS
+    KA & KCA & MA & FA & SELA --> Norm --> RS
     RS --> Presentation
 ```
 
@@ -237,8 +238,12 @@ Commands:
       <li>Extracts core kernel metadata: release, version, machine architecture, node, system name, and processor.</li>
       <li>Reads and parses boot arguments from <code>/proc/cmdline</code>.</li>
       <li>Inspects <code>/sys/kernel/security/lockdown</code> to identify active lockdown mode (parses <code>none</code>, <code>integrity</code>, or <code>confidentiality</code> from bracketed status output).</li>
-      <li>Reads <code>/sys/kernel/security/lsm</code> to extract active Linux Security Modules (such as SELinux, AppArmor, BPF, Landlock, Yama, Integrity).</li>
-      <li>Handles missing files or permission restrictions gracefully using typed status indicators.</li>
+      <li>Reads <code>/sys/kernel/security/lsm</code> to extract ordered active Linux Security Modules (e.g., lockdown, capability, yama, selinux, bpf, landlock, ipe, ima, evm).</li>
+      <li>Inspects <code>/sys/fs/selinux/enforce</code> and <code>/sys/fs/selinux/policyvers</code> to determine runtime SELinux enforcement mode (enforcing vs permissive) and policy version.</li>
+      <li>Collects runtime IMA (Integrity Measurement Architecture) evidence from <code>/sys/kernel/security/ima</code> including policy availability, runtime measurement count, violations count, and boot parameters.</li>
+      <li>Collects runtime EVM (Extended Verification Module) state from <code>/sys/kernel/security/evm</code> including status flags and initialization state.</li>
+      <li>Collects runtime IPE (Integrity Policy Enforcement) state from <code>/sys/kernel/security/ipe</code> including enforce mode, audit state, and deployed policies.</li>
+      <li>Handles missing files or permission restrictions gracefully using typed status indicators (AVAILABLE, UNAVAILABLE, ERROR).</li>
     </ul>
   </li>
   <li>
@@ -317,6 +322,12 @@ Commands:
     </ul>
   </li>
   <li>
+    <strong>SELinuxAnalyzer</strong> (<code>src/kasa/analyzers/selinux.py</code>):
+    <ul>
+      <li><strong>KASA-SELINUX-001</strong>: Evaluates runtime SELinux enforcement mode. Emits a finding when SELinux is active in permissive mode rather than enforcing.</li>
+    </ul>
+  </li>
+  <li>
     <strong>FindingNormalizer</strong> (<code>src/kasa/analyzers/normalize.py</code>):
     <ul>
       <li>Deduplicates and standardizes security findings across multiple analyzers.</li>
@@ -392,10 +403,11 @@ Commands:
 
 <h3 id="6-testing-and-quality-assurance">6. Testing and Quality Assurance</h3>
 
-<p>The codebase includes 57 comprehensive unit tests across <code>tests/</code> verifying:</p>
+<p>The codebase includes 104 comprehensive unit tests across <code>tests/</code> verifying:</p>
 <ul>
   <li>CLI command invocations and argument parsing (<code>test_cli.py</code>)</li>
-  <li>Kernel telemetry and lockdown mode extraction (<code>test_kernel.py</code>)</li>
+  <li>Kernel telemetry, lockdown, LSM, IMA, EVM, and IPE extraction (<code>test_kernel.py</code>)</li>
+  <li>Runtime SELinux enforcement mode extraction and analysis (<code>test_selinux.py</code>)</li>
   <li>Kernel configuration discovery and decompression (<code>test_config.py</code>)</li>
   <li>Module collection and signature enforcement (<code>test_modules.py</code>)</li>
   <li>Filesystem mount inspection (<code>test_filesystem.py</code>)</li>
@@ -425,6 +437,13 @@ Commands:
       <td>LOW</td>
       <td>Kernel lockdown is not enabled</td>
       <td>Lockdown mode is reported as none</td>
+    </tr>
+    <tr>
+      <td><code>KASA-SELINUX-001</code></td>
+      <td>selinux</td>
+      <td>MEDIUM</td>
+      <td>SELinux is not enforcing</td>
+      <td>SELinux is active in permissive mode</td>
     </tr>
     <tr>
       <td><code>KASA-CONFIG-RANDOMIZE_BASE</code></td>
