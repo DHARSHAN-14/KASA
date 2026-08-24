@@ -20,7 +20,8 @@ class KernelCollector:
     _PROC_CMDLINE = Path("/proc/cmdline")
     _LOCKDOWN = Path("/sys/kernel/security/lockdown")
     _LSM = Path("/sys/kernel/security/lsm")
-    _LSM = Path("/sys/kernel/security/lsm")
+    _SELINUX_ENFORCE = Path("/sys/fs/selinux/enforce")
+    _SELINUX_POLICY_VERSION = Path("/sys/fs/selinux/policyvers")
 
     def collect(self) -> KernelSnapshot:
         """Collect kernel metadata and kernel security evidence."""
@@ -52,6 +53,11 @@ class KernelCollector:
         if lsm_error is not None:
             errors.append(lsm_error)
 
+        _, selinux_evidence, selinux_error = self._collect_selinux()
+
+        if selinux_error is not None:
+            errors.append(selinux_error)
+
         return KernelSnapshot(
             kernel=kernel_info,
             command_line=command_line,
@@ -60,6 +66,7 @@ class KernelCollector:
                 command_line_evidence,
                 lockdown_evidence,
                 lsm_evidence,
+                selinux_evidence,
             ],
             collection_errors=errors,
         )
@@ -279,3 +286,121 @@ class KernelCollector:
                 return mode
 
         return None
+
+    def _collect_selinux(
+        self,
+    ) -> tuple[dict[str, object] | None, EvidenceItem, str | None]:
+        """Collect runtime SELinux state from the kernel securityfs interface."""
+        source = EvidenceSource(
+            path=str(self._SELINUX_ENFORCE),
+            description="SELinux enforcement mode and policy version.",
+        )
+
+        try:
+            enforce_raw = self._SELINUX_ENFORCE.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).strip()
+
+        except FileNotFoundError:
+            error = f"SELinux interface unavailable: {self._SELINUX_ENFORCE}"
+
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.selinux",
+                    value=None,
+                    status=EvidenceStatus.UNAVAILABLE,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        except PermissionError:
+            error = (
+                f"Permission denied reading SELinux enforce: {self._SELINUX_ENFORCE}"
+            )
+
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.selinux",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        except OSError as exc:
+            error = f"Unable to read SELinux enforce {self._SELINUX_ENFORCE}: {exc}"
+
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.selinux",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        if enforce_raw == "1":
+            mode: str | None = "enforcing"
+        elif enforce_raw == "0":
+            mode = "permissive"
+        else:
+            error = (
+                f"Unexpected SELinux enforce value {enforce_raw!r}: "
+                f"{self._SELINUX_ENFORCE}"
+            )
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.selinux",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        policy_version: int | None = None
+
+        try:
+            policyvers_raw = self._SELINUX_POLICY_VERSION.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).strip()
+            policy_version = int(policyvers_raw)
+
+        except FileNotFoundError:
+            pass  # Policy version is supplemental; enforcement mode already known.
+
+        except PermissionError:
+            pass
+
+        except (OSError, ValueError):
+            pass
+
+        value = {
+            "enabled": True,
+            "mode": mode,
+            "policy_version": policy_version,
+        }
+
+        return (
+            value,
+            EvidenceItem(
+                key="kernel.selinux",
+                value=value,
+                status=EvidenceStatus.AVAILABLE,
+                source=source,
+            ),
+            None,
+        )

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from kasa.analyzers.kernel import KernelAnalyzer
 from kasa.collectors.filesystem import FilesystemInventory
 from kasa.collectors.kernel import KernelCollector
@@ -164,3 +166,129 @@ def test_parse_lsm_state_ignores_empty_entries() -> None:
         "capability",
         "selinux",
     ]
+
+
+# ---------------------------------------------------------------------------
+# SELinux evidence tests
+# ---------------------------------------------------------------------------
+
+
+def test_collect_selinux_enforcing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """enforce=1 should produce mode='enforcing'."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._SELINUX_ENFORCE:
+            return "1\n"
+        if self == KernelCollector._SELINUX_POLICY_VERSION:
+            return "33\n"
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    collector = KernelCollector()
+    result, evidence, error = collector._collect_selinux()
+
+    assert error is None
+    assert evidence.key == "kernel.selinux"
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert result is not None
+    assert result["enabled"] is True
+    assert result["mode"] == "enforcing"
+    assert result["policy_version"] == 33
+
+
+def test_collect_selinux_permissive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """enforce=0 should produce mode='permissive'."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._SELINUX_ENFORCE:
+            return "0\n"
+        if self == KernelCollector._SELINUX_POLICY_VERSION:
+            return "33\n"
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    collector = KernelCollector()
+    result, evidence, error = collector._collect_selinux()
+
+    assert error is None
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert result is not None
+    assert result["mode"] == "permissive"
+
+
+def test_collect_selinux_policy_version_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Policy version should be parsed as an integer."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._SELINUX_ENFORCE:
+            return "1"
+        if self == KernelCollector._SELINUX_POLICY_VERSION:
+            return "  33  "
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    _, evidence, _ = KernelCollector()._collect_selinux()
+
+    assert evidence.value is not None
+    assert evidence.value["policy_version"] == 33
+
+
+def test_collect_selinux_missing_enforce_interface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FileNotFoundError on enforce path -> UNAVAILABLE evidence and error string."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._SELINUX_ENFORCE:
+            raise FileNotFoundError(self)
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    result, evidence, error = KernelCollector()._collect_selinux()
+
+    assert result is None
+    assert error is not None
+    assert evidence.status == EvidenceStatus.UNAVAILABLE
+    assert evidence.key == "kernel.selinux"
+    assert evidence.value is None
+
+
+def test_collect_selinux_invalid_enforce_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unexpected enforce value should produce ERROR evidence and an error string."""
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._SELINUX_ENFORCE:
+            return "bogus"
+        return original_read_text(self, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    result, evidence, error = KernelCollector()._collect_selinux()
+
+    assert result is None
+    assert error is not None
+    assert "bogus" in error
+    assert evidence.status == EvidenceStatus.ERROR
+
+
+def test_kernel_collector_contains_selinux_evidence() -> None:
+    """collect() must include a 'kernel.selinux' EvidenceItem."""
+    snapshot = KernelCollector().collect()
+
+    selinux = next(
+        (item for item in snapshot.evidence if item.key == "kernel.selinux"),
+        None,
+    )
+
+    assert selinux is not None
+    assert selinux.source.path == str(KernelCollector._SELINUX_ENFORCE)
+    assert selinux.status.value in {"available", "unavailable", "error"}
