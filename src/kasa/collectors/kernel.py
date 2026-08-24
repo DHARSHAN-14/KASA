@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import platform
 from pathlib import Path
 
@@ -22,6 +23,8 @@ class KernelCollector:
     _LSM = Path("/sys/kernel/security/lsm")
     _SELINUX_ENFORCE = Path("/sys/fs/selinux/enforce")
     _SELINUX_POLICY_VERSION = Path("/sys/fs/selinux/policyvers")
+    _IMA = Path("/sys/kernel/security/ima")
+    _IMA_INTEGRITY = Path("/sys/kernel/security/integrity/ima")
 
     def collect(self) -> KernelSnapshot:
         """Collect kernel metadata and kernel security evidence."""
@@ -58,6 +61,11 @@ class KernelCollector:
         if selinux_error is not None:
             errors.append(selinux_error)
 
+        _, ima_evidence, ima_error = self._collect_ima(command_line)
+
+        if ima_error is not None:
+            errors.append(ima_error)
+
         return KernelSnapshot(
             kernel=kernel_info,
             command_line=command_line,
@@ -67,6 +75,7 @@ class KernelCollector:
                 lockdown_evidence,
                 lsm_evidence,
                 selinux_evidence,
+                ima_evidence,
             ],
             collection_errors=errors,
         )
@@ -407,3 +416,141 @@ class KernelCollector:
             ),
             None,
         )
+
+    def _collect_ima(
+        self,
+        command_line: str | None = None,
+    ) -> tuple[dict[str, object] | None, EvidenceItem, str | None]:
+        """Collect runtime IMA (Integrity Measurement Architecture) state."""
+        source = EvidenceSource(
+            path=str(self._IMA),
+            description="IMA runtime measurement and policy interface.",
+        )
+
+        try:
+            if self._IMA.exists():
+                target_dir = self._IMA
+            elif self._IMA_INTEGRITY.exists():
+                target_dir = self._IMA_INTEGRITY
+            else:
+                target_dir = None
+        except PermissionError:
+            error = f"Permission denied accessing IMA interface: {self._IMA}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.ima",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+        except OSError as exc:
+            error = f"Unable to access IMA interface {self._IMA}: {exc}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.ima",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        if target_dir is None:
+            error = f"IMA interface unavailable: {self._IMA}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.ima",
+                    value=None,
+                    status=EvidenceStatus.UNAVAILABLE,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        policy_available = False
+        with contextlib.suppress(PermissionError, OSError):
+            policy_available = (target_dir / "policy").exists()
+
+        measurements_count: int | None = None
+        try:
+            raw_count = (
+                (target_dir / "runtime_measurements_count")
+                .read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                .strip()
+            )
+            measurements_count = int(raw_count)
+        except (FileNotFoundError, PermissionError, OSError, ValueError):
+            pass
+
+        violations_count: int | None = None
+        try:
+            raw_violations = (
+                (target_dir / "violations")
+                .read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                .strip()
+            )
+            violations_count = int(raw_violations)
+        except (FileNotFoundError, PermissionError, OSError, ValueError):
+            pass
+
+        boot_params = self._parse_cmdline_params(command_line, "ima")
+
+        appraisal_state = boot_params.get("ima_appraise", "unknown")
+        if appraisal_state == "1":
+            appraisal_state = "enforce"
+
+        value: dict[str, object] = {
+            "supported": True,
+            "interface_path": str(target_dir),
+            "policy_available": policy_available,
+            "runtime_measurements_count": measurements_count,
+            "violations_count": violations_count,
+            "boot_parameters": boot_params,
+            "appraisal_runtime_state": appraisal_state,
+        }
+
+        return (
+            value,
+            EvidenceItem(
+                key="kernel.ima",
+                value=value,
+                status=EvidenceStatus.AVAILABLE,
+                source=source,
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _parse_cmdline_params(
+        command_line: str | None,
+        prefix: str,
+    ) -> dict[str, str]:
+        """Extract kernel boot parameters starting with a given prefix."""
+        if not command_line:
+            return {}
+
+        params: dict[str, str] = {}
+        for token in command_line.split():
+            if not token.startswith(prefix):
+                continue
+            if "=" in token:
+                key, val = token.split("=", 1)
+                params[key] = val
+            else:
+                params[token] = "1"
+
+        return params

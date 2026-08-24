@@ -389,3 +389,139 @@ def test_kernel_collector_contains_selinux_evidence() -> None:
     assert selinux is not None
     assert selinux.source.path == str(KernelCollector._SELINUX_ENFORCE)
     assert selinux.status.value in {"available", "unavailable", "error"}
+
+
+# ---------------------------------------------------------------------------
+# IMA evidence tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_cmdline_params() -> None:
+    """_parse_cmdline_params parses prefixed boot arguments into key-value pairs."""
+    cmdline = (
+        "quiet BOOT_IMAGE=/vmlinuz ima_policy=tcb ima_appraise=enforce ipe.enforce=1"
+    )
+    params = KernelCollector._parse_cmdline_params(cmdline, "ima")
+
+    assert params == {
+        "ima_policy": "tcb",
+        "ima_appraise": "enforce",
+    }
+
+
+def test_parse_cmdline_params_empty_or_none() -> None:
+    """Empty or None command line returns empty dict."""
+    assert KernelCollector._parse_cmdline_params(None, "ima") == {}
+    assert KernelCollector._parse_cmdline_params("", "ima") == {}
+
+
+def test_collect_ima_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Available IMA interface returns structured evidence with metrics."""
+    original_exists = Path.exists
+    original_read_text = Path.read_text
+
+    def fake_exists(self: Path) -> bool:
+        if self in (KernelCollector._IMA, KernelCollector._IMA / "policy"):
+            return True
+        return original_exists(self)
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._IMA / "runtime_measurements_count":
+            return "42\n"
+        if self == KernelCollector._IMA / "violations":
+            return "0\n"
+        return original_read_text(self, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    cmdline = "quiet ima_policy=tcb ima_appraise=enforce"
+    val, evidence, error = KernelCollector()._collect_ima(cmdline)
+
+    assert error is None
+    assert evidence.key == "kernel.ima"
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert val is not None
+    assert val["supported"] is True
+    assert val["policy_available"] is True
+    assert val["runtime_measurements_count"] == 42
+    assert val["violations_count"] == 0
+    assert val["boot_parameters"] == {
+        "ima_policy": "tcb",
+        "ima_appraise": "enforce",
+    }
+    assert val["appraisal_runtime_state"] == "enforce"
+
+
+def test_collect_ima_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing IMA paths return UNAVAILABLE status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self in (KernelCollector._IMA, KernelCollector._IMA_INTEGRITY):
+            return False
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_ima()
+
+    assert val is None
+    assert error is not None
+    assert "IMA interface unavailable" in error
+    assert evidence.status == EvidenceStatus.UNAVAILABLE
+    assert evidence.key == "kernel.ima"
+
+
+def test_collect_ima_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PermissionError on IMA check returns ERROR status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._IMA:
+            raise PermissionError("Permission denied")
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_ima()
+
+    assert val is None
+    assert error is not None
+    assert "Permission denied accessing IMA interface" in error
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.key == "kernel.ima"
+
+
+def test_collect_ima_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OSError on IMA check returns ERROR status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._IMA:
+            raise OSError("I/O failure")
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_ima()
+
+    assert val is None
+    assert error is not None
+    assert "Unable to access IMA interface" in error
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.key == "kernel.ima"
+
+
+def test_kernel_collector_contains_ima_evidence() -> None:
+    """collect() must include a 'kernel.ima' EvidenceItem."""
+    snapshot = KernelCollector().collect()
+
+    ima = next(
+        (item for item in snapshot.evidence if item.key == "kernel.ima"),
+        None,
+    )
+
+    assert ima is not None
+    assert ima.source.path == str(KernelCollector._IMA)
+    assert ima.status.value in {"available", "unavailable", "error"}
