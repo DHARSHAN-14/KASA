@@ -27,6 +27,7 @@ class KernelCollector:
     _IMA_INTEGRITY = Path("/sys/kernel/security/integrity/ima")
     _EVM = Path("/sys/kernel/security/evm")
     _EVM_INTEGRITY = Path("/sys/kernel/security/integrity/evm/evm")
+    _IPE = Path("/sys/kernel/security/ipe")
 
     def collect(self) -> KernelSnapshot:
         """Collect kernel metadata and kernel security evidence."""
@@ -73,6 +74,11 @@ class KernelCollector:
         if evm_error is not None:
             errors.append(evm_error)
 
+        _, ipe_evidence, ipe_error = self._collect_ipe(command_line)
+
+        if ipe_error is not None:
+            errors.append(ipe_error)
+
         return KernelSnapshot(
             kernel=kernel_info,
             command_line=command_line,
@@ -84,6 +90,7 @@ class KernelCollector:
                 selinux_evidence,
                 ima_evidence,
                 evm_evidence,
+                ipe_evidence,
             ],
             collection_errors=errors,
         )
@@ -643,6 +650,139 @@ class KernelCollector:
             value,
             EvidenceItem(
                 key="kernel.evm",
+                value=value,
+                status=EvidenceStatus.AVAILABLE,
+                source=source,
+            ),
+            None,
+        )
+
+    def _collect_ipe(
+        self,
+        command_line: str | None = None,
+    ) -> tuple[dict[str, object] | None, EvidenceItem, str | None]:
+        """Collect runtime IPE (Integrity Policy Enforcement) state."""
+        source = EvidenceSource(
+            path=str(self._IPE),
+            description="IPE policy deployment and enforcement interface.",
+        )
+
+        try:
+            exists = self._IPE.exists()
+        except PermissionError:
+            error = f"Permission denied accessing IPE interface: {self._IPE}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.ipe",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+        except OSError as exc:
+            error = f"Unable to access IPE interface {self._IPE}: {exc}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.ipe",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        if not exists:
+            error = f"IPE interface unavailable: {self._IPE}"
+            return (
+                None,
+                EvidenceItem(
+                    key="kernel.ipe",
+                    value=None,
+                    status=EvidenceStatus.UNAVAILABLE,
+                    source=source,
+                    error=error,
+                ),
+                error,
+            )
+
+        enforce: bool | None = None
+        try:
+            raw_enforce = (
+                (self._IPE / "enforce")
+                .read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                .strip()
+            )
+            if raw_enforce == "1":
+                enforce = True
+            elif raw_enforce == "0":
+                enforce = False
+        except (FileNotFoundError, PermissionError, OSError):
+            pass
+
+        success_audit: bool | None = None
+        try:
+            raw_audit = (
+                (self._IPE / "success_audit")
+                .read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                .strip()
+            )
+            if raw_audit == "1":
+                success_audit = True
+            elif raw_audit == "0":
+                success_audit = False
+        except (FileNotFoundError, PermissionError, OSError):
+            pass
+
+        policies: list[str] = []
+        active_policies: list[str] = []
+        policies_dir = self._IPE / "policies"
+        try:
+            if policies_dir.is_dir():
+                for policy_entry in sorted(policies_dir.iterdir()):
+                    policies.append(policy_entry.name)
+                    active_file = policy_entry / "active"
+                    try:
+                        if (
+                            active_file.exists()
+                            and active_file.read_text(
+                                encoding="utf-8",
+                                errors="replace",
+                            ).strip()
+                            == "1"
+                        ):
+                            active_policies.append(policy_entry.name)
+                    except (PermissionError, OSError):
+                        pass
+        except (PermissionError, OSError):
+            pass
+
+        boot_params = self._parse_cmdline_params(command_line, "ipe")
+
+        value: dict[str, object] = {
+            "supported": True,
+            "interface_path": str(self._IPE),
+            "enforce": enforce,
+            "success_audit": success_audit,
+            "policies": policies,
+            "active_policies": active_policies,
+            "boot_parameters": boot_params,
+        }
+
+        return (
+            value,
+            EvidenceItem(
+                key="kernel.ipe",
                 value=value,
                 status=EvidenceStatus.AVAILABLE,
                 source=source,

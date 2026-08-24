@@ -695,3 +695,164 @@ def test_kernel_collector_contains_evm_evidence() -> None:
     assert evm is not None
     assert evm.source.path == str(KernelCollector._EVM)
     assert evm.status.value in {"available", "unavailable", "error"}
+
+
+# ---------------------------------------------------------------------------
+# IPE evidence tests
+# ---------------------------------------------------------------------------
+
+
+def test_collect_ipe_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Available IPE interface returns structured evidence with policies."""
+    original_exists = Path.exists
+    original_is_dir = Path.is_dir
+    original_read_text = Path.read_text
+
+    policy_dir = KernelCollector._IPE / "policies" / "boot_policy"
+    active_file = policy_dir / "active"
+
+    def fake_exists(self: Path) -> bool:
+        if self in (KernelCollector._IPE, active_file):
+            return True
+        return original_exists(self)
+
+    def fake_is_dir(self: Path) -> bool:
+        if self == KernelCollector._IPE / "policies":
+            return True
+        return original_is_dir(self)
+
+    def fake_iterdir(self: Path) -> list[Path]:
+        if self == KernelCollector._IPE / "policies":
+            return [policy_dir]
+        return []
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._IPE / "enforce":
+            return "1\n"
+        if self == KernelCollector._IPE / "success_audit":
+            return "1\n"
+        if self == active_file:
+            return "1\n"
+        return original_read_text(self, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(Path, "is_dir", fake_is_dir)
+    monkeypatch.setattr(Path, "iterdir", fake_iterdir)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    cmdline = "quiet ipe.enforce=1"
+    val, evidence, error = KernelCollector()._collect_ipe(cmdline)
+
+    assert error is None
+    assert evidence.key == "kernel.ipe"
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert val is not None
+    assert val["supported"] is True
+    assert val["enforce"] is True
+    assert val["success_audit"] is True
+    assert val["policies"] == ["boot_policy"]
+    assert val["active_policies"] == ["boot_policy"]
+    assert val["boot_parameters"] == {"ipe.enforce": "1"}
+
+
+def test_collect_ipe_available_permissive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IPE enforce=0 and success_audit=0 map to False booleans."""
+    original_exists = Path.exists
+    original_read_text = Path.read_text
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._IPE:
+            return True
+        return original_exists(self)
+
+    def fake_read_text(self: Path, **kwargs: object) -> str:
+        if self == KernelCollector._IPE / "enforce":
+            return "0\n"
+        if self == KernelCollector._IPE / "success_audit":
+            return "0\n"
+        return original_read_text(self, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    val, evidence, error = KernelCollector()._collect_ipe()
+
+    assert error is None
+    assert evidence.status == EvidenceStatus.AVAILABLE
+    assert val is not None
+    assert val["enforce"] is False
+    assert val["success_audit"] is False
+
+
+def test_collect_ipe_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing IPE path returns UNAVAILABLE status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._IPE:
+            return False
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_ipe()
+
+    assert val is None
+    assert error is not None
+    assert "IPE interface unavailable" in error
+    assert evidence.status == EvidenceStatus.UNAVAILABLE
+    assert evidence.key == "kernel.ipe"
+
+
+def test_collect_ipe_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PermissionError on IPE directory check returns ERROR status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._IPE:
+            raise PermissionError("Permission denied")
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_ipe()
+
+    assert val is None
+    assert error is not None
+    assert "Permission denied accessing IPE interface" in error
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.key == "kernel.ipe"
+
+
+def test_collect_ipe_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OSError on IPE directory check returns ERROR status."""
+    original_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == KernelCollector._IPE:
+            raise OSError("I/O failure")
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    val, evidence, error = KernelCollector()._collect_ipe()
+
+    assert val is None
+    assert error is not None
+    assert "Unable to access IPE interface" in error
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.key == "kernel.ipe"
+
+
+def test_kernel_collector_contains_ipe_evidence() -> None:
+    """collect() must include a 'kernel.ipe' EvidenceItem."""
+    snapshot = KernelCollector().collect()
+
+    ipe = next(
+        (item for item in snapshot.evidence if item.key == "kernel.ipe"),
+        None,
+    )
+
+    assert ipe is not None
+    assert ipe.source.path == str(KernelCollector._IPE)
+    assert ipe.status.value in {"available", "unavailable", "error"}
