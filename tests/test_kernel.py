@@ -129,6 +129,125 @@ def test_kernel_analyzer_does_not_report_confidentiality_lockdown() -> None:
     assert findings == []
 
 
+def test_kernel_analyzer_missing_lockdown_evidence_produces_no_finding() -> None:
+    snapshot = SystemSnapshot(
+        kernel=KernelSnapshot(
+            kernel=KernelInfo(
+                release="test",
+                version="test",
+                machine="x86_64",
+                node="test",
+                system="Linux",
+                processor="test",
+            ),
+            evidence=[],
+        ),
+        modules=ModuleInventory(),
+        filesystems=FilesystemInventory(),
+    )
+
+    findings = KernelAnalyzer().analyze(snapshot)
+
+    assert findings == []
+
+
+def test_kernel_analyzer_unavailable_lockdown_evidence_produces_no_finding() -> None:
+    snapshot = SystemSnapshot(
+        kernel=KernelSnapshot(
+            kernel=KernelInfo(
+                release="test",
+                version="test",
+                machine="x86_64",
+                node="test",
+                system="Linux",
+                processor="test",
+            ),
+            evidence=[
+                EvidenceItem(
+                    key="kernel.lockdown",
+                    value=None,
+                    status=EvidenceStatus.UNAVAILABLE,
+                    source=EvidenceSource(
+                        path="/sys/kernel/security/lockdown",
+                        description="Current kernel lockdown state.",
+                    ),
+                )
+            ],
+        ),
+        modules=ModuleInventory(),
+        filesystems=FilesystemInventory(),
+    )
+
+    findings = KernelAnalyzer().analyze(snapshot)
+
+    assert findings == []
+
+
+def test_kernel_analyzer_error_lockdown_evidence_produces_no_finding() -> None:
+    snapshot = SystemSnapshot(
+        kernel=KernelSnapshot(
+            kernel=KernelInfo(
+                release="test",
+                version="test",
+                machine="x86_64",
+                node="test",
+                system="Linux",
+                processor="test",
+            ),
+            evidence=[
+                EvidenceItem(
+                    key="kernel.lockdown",
+                    value=None,
+                    status=EvidenceStatus.ERROR,
+                    source=EvidenceSource(
+                        path="/sys/kernel/security/lockdown",
+                        description="Current kernel lockdown state.",
+                    ),
+                    error="Permission denied",
+                )
+            ],
+        ),
+        modules=ModuleInventory(),
+        filesystems=FilesystemInventory(),
+    )
+
+    findings = KernelAnalyzer().analyze(snapshot)
+
+    assert findings == []
+
+
+def test_kernel_analyzer_malformed_lockdown_evidence_produces_no_finding() -> None:
+    snapshot = SystemSnapshot(
+        kernel=KernelSnapshot(
+            kernel=KernelInfo(
+                release="test",
+                version="test",
+                machine="x86_64",
+                node="test",
+                system="Linux",
+                processor="test",
+            ),
+            evidence=[
+                EvidenceItem(
+                    key="kernel.lockdown",
+                    value="not-a-dict",
+                    status=EvidenceStatus.AVAILABLE,
+                    source=EvidenceSource(
+                        path="/sys/kernel/security/lockdown",
+                        description="Current kernel lockdown state.",
+                    ),
+                )
+            ],
+        ),
+        modules=ModuleInventory(),
+        filesystems=FilesystemInventory(),
+    )
+
+    findings = KernelAnalyzer().analyze(snapshot)
+
+    assert findings == []
+
+
 def test_kernel_collector_contains_lsm_evidence() -> None:
     snapshot = KernelCollector().collect()
 

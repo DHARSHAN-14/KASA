@@ -48,14 +48,17 @@ class ModuleAnalyzer(Analyzer):
 
         config = self._get_kernel_config(snapshot)
 
+        if not config:
+            return findings
+
+        if config.get("CONFIG_MODULES") == "n":
+            return findings
+
         module_sig = config.get("CONFIG_MODULE_SIG")
         module_sig_force = config.get("CONFIG_MODULE_SIG_FORCE")
 
         command_line = snapshot.kernel.command_line or ""
         module_sig_enforce = "module.sig_enforce=1" in command_line
-
-        if not config:
-            return findings
 
         signing_enforced = module_sig_force == "y" or module_sig_enforce
 

@@ -143,3 +143,49 @@ def test_missing_module_sig_force_is_not_treated_as_enforced() -> None:
     assert finding.evidence[0].value["config_module_sig"] == "y"
     assert finding.evidence[0].value["config_module_sig_force"] is None
     assert finding.evidence[0].value["module_sig_enforce"] is False
+
+
+def test_modules_disabled_config_produces_no_signing_finding() -> None:
+    snapshot = make_snapshot(
+        {
+            "CONFIG_MODULES": "n",
+            "CONFIG_MODULE_SIG": "n",
+        }
+    )
+
+    findings = ModuleAnalyzer().analyze(snapshot)
+
+    assert not any(finding.id == "KASA-MODULE-002" for finding in findings)
+
+
+def test_malformed_kernel_config_evidence_produces_no_finding() -> None:
+    snapshot = SystemSnapshot(
+        kernel=KernelSnapshot(
+            kernel=KernelInfo(
+                release="test",
+                version="test",
+                machine="x86_64",
+                node="test",
+                system="Linux",
+                processor="test",
+            ),
+            evidence=[],
+        ),
+        kernel_config=[
+            EvidenceItem(
+                key="kernel.config",
+                value="malformed-not-a-dict",
+                status="available",
+                source=EvidenceSource(
+                    path="/boot/config-test",
+                    description="Test",
+                ),
+            )
+        ],
+        modules=ModuleInventory(),
+        filesystems={},
+    )
+
+    findings = ModuleAnalyzer().analyze(snapshot)
+
+    assert not any(finding.id == "KASA-MODULE-002" for finding in findings)
